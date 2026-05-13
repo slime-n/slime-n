@@ -149,7 +149,12 @@ def train(args):
         # to a single-pass loop with external_data=None — bit-identical to
         # pre-multi-producer behavior.
         trainable_handles = [h for h in handles.values() if h.config.trainable]
-        frozen_handles = [h for h in handles.values() if not h.config.trainable]
+        # Frozen producers run their Megatron forward-only train() to emit
+        # external_data (e.g. teacher_log_probs). Engine-only frozen policies
+        # (m✗ s✓ frozen standalone SGLang teacher / judge / RM) have no
+        # Megatron actor — they contribute via rollout-time HTTP calls from
+        # custom rollout functions, not via the frozen-producer pass.
+        frozen_handles = [h for h in handles.values() if not h.config.trainable and h.config.has_megatron()]
 
         # frozen producers — parallel within the frozen pass: each producer reads
         # the same seed_data and produces an independent output dict. Merging is
@@ -209,10 +214,14 @@ def train(args):
                 ray.get(rollout_manager.save.remote(rollout_id))
 
         # memory hygiene — parallel across policies (each actor's clear_memory
-        # frees only its own GPU; no cross-actor coordination).
+        # frees only its own GPU; no cross-actor coordination). Engine-only
+        # policies have no Megatron actor (train_group is None) and nothing
+        # to clear.
         if not args.offload_train:
             cleanup_refs: list = []
             for h in handles.values():
+                if h.train_group is None:
+                    continue
                 cleanup_refs.extend(h.train_group.async_clear_memory())
             if cleanup_refs:
                 ray.get(cleanup_refs)

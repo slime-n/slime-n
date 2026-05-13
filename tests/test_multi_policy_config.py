@@ -1493,6 +1493,19 @@ class TestFrozenEnginePolicyShape:
     def test_validator_accepts_sglang_only_frozen(self):
         validate_policy_config(self._frozen_sglang_teacher())  # no raise
 
+    def test_validator_rejects_megatron_less_trainable(self):
+        # megatron_num_nodes=0 + trainable=True is logically impossible.
+        cfg = self._frozen_sglang_teacher(trainable=True)
+        with pytest.raises(ValueError, match="megatron_num_nodes=0 requires trainable=false"):
+            validate_policy_config(cfg)
+
+    def test_validator_rejects_no_gpus_at_all(self):
+        # megatron_num_nodes=0 + sglang_num_nodes=0 (or no sglang block) is a
+        # policy with zero GPUs — meaningless.
+        cfg = self._frozen_sglang_teacher(sglang_num_nodes=0, sglang=None)
+        with pytest.raises(ValueError, match="no SGLang engine"):
+            validate_policy_config(cfg)
+
     def test_validator_catches_sglang_placement_on_frozen_engine(self):
         # Previously this was skipped for trainable=False; now applies whenever
         # has_engine() is true. 1 node × 1 gpu = 1, server_groups sums to 2.

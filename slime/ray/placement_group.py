@@ -295,13 +295,20 @@ def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
         args_p = config_to_namespace(cfg, args)
         args_p.actor_gpu_offset = actor_gpu_offset
         actor_gpu_offset += cfg.megatron_num_nodes * cfg.num_gpus_per_node
-        train_group = allocate_train_group(
-            args=args_p,
-            num_nodes=cfg.megatron_num_nodes,
-            num_gpus_per_node=cfg.num_gpus_per_node,
-            pg=pgs[cfg.name],
-            role=cfg.role,
-        )
+        # Allocate a RayTrainGroup only for policies that have a Megatron actor.
+        # For engine-only policies (m✗ s✓ frozen standalone SGLang engine),
+        # RayTrainGroup(num_nodes=0) would spawn zero workers and downstream
+        # async_init returns [] — crashing the start_rollout_id reconciliation.
+        if cfg.has_megatron():
+            train_group = allocate_train_group(
+                args=args_p,
+                num_nodes=cfg.megatron_num_nodes,
+                num_gpus_per_node=cfg.num_gpus_per_node,
+                pg=pgs[cfg.name],
+                role=cfg.role,
+            )
+        else:
+            train_group = None
         handles[cfg.name] = PolicyHandle(config=cfg, args=args_p, train_group=train_group)
         # Register every engine-hosting policy with the rollout manager so it
         # spins up an SGLang server and routes inference requests to it. This
@@ -315,9 +322,13 @@ def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
 
     # ── async_init each + reconcile start_rollout_ids across policies ──
     # async_init kwargs mirror legacy create_training_models so OPD-megatron
-    # and ref-model toggles work per-policy via PolicyConfig.overrides.
+    # and ref-model toggles work per-policy via PolicyConfig.overrides. Engine-
+    # only policies (train_group is None) have no actor to initialize and don't
+    # carry a start_rollout_id.
     starts: dict[str, int] = {}
     for name, h in handles.items():
+        if h.train_group is None:
+            continue
         ids = ray.get(
             h.train_group.async_init(
                 h.args,

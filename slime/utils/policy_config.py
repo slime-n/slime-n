@@ -170,6 +170,21 @@ def validate_policy_config(cfg: PolicyConfig) -> None:
     if not cfg.hf_checkpoint:
         raise ValueError(f"{cfg.name}: hf_checkpoint required")
 
+    # Megatron-less shape (m✗ s✓ frozen standalone engine): policy has no
+    # training actor at all. Only legal if it's a frozen producer that hosts
+    # an engine — otherwise it has zero GPUs and zero purpose.
+    if not cfg.has_megatron():
+        if cfg.trainable:
+            raise ValueError(
+                f"{cfg.name}: megatron_num_nodes=0 requires trainable=false — "
+                f"a policy without a Megatron actor cannot train"
+            )
+        if not cfg.has_engine():
+            raise ValueError(
+                f"{cfg.name}: megatron_num_nodes=0 and no SGLang engine — "
+                f"policy has no GPU allocation at all"
+            )
+
     # Sglang placement consistency. Applies to every policy that hosts an
     # engine — trainable paired pipelines AND frozen standalone engines
     # (e.g. OPD SGLang teacher, judge / RM). Megatron-only producers
