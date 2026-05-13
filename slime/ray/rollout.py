@@ -505,16 +505,23 @@ class RolloutManager:
         policy_args,
         train_parallel_config: dict | None = None,
     ) -> None:
-        """Bind a trainable policy to its 1:1 sglang server. Multi-policy entry point.
+        """Bind a policy to its 1:1 sglang server. Multi-policy entry point.
 
-        Called once per policy by create_training_models_multi at startup. Stores:
-          - sglang server name (for weight-sync routing in get_engines_and_lock)
+        Called once per engine-hosting policy by create_training_models_multi
+        at startup. Stores:
+          - sglang server name (for weight-sync routing in get_engines_and_lock,
+            and for custom rollout functions to look up frozen engines via
+            args.sglang_model_routers)
           - per-policy args namespace (read by _split_by_policy / _post_process_rewards
             for per-policy GRPO group-norm — Step 2)
           - per-policy train_parallel_config (per-policy dp_size for sample DP partition)
 
-        Enforces the 1:1 invariant: each sglang server has exactly one trainable owner,
-        and the server must have update_weights=True (frozen mirrors are rejected).
+        Enforces the 1:1 invariant: each sglang server has exactly one owner.
+        For trainable policies (paired m✓ s✓), the server must additionally
+        have update_weights=True — otherwise weight push silently no-ops.
+        Frozen standalone engines (m✗ s✓ judge / RM / OPD SGLang teacher) bind
+        to update_weights=false servers by design and are exempt from that
+        check.
         """
         if server_name in self._policy_to_server.values():
             raise ValueError(
@@ -522,7 +529,11 @@ class RolloutManager:
                 f"(existing bindings: {self._policy_to_server})"
             )
         srv = self._get_server(server_name)
-        if not srv.update_weights:
+        # Only trainable policies need a weight-updatable server. Frozen
+        # standalone engines (trainable=false on their PolicyConfig) are
+        # expected to have update_weights=false and never receive a broadcast.
+        is_trainable = getattr(policy_args, "trainable", True)
+        if is_trainable and not srv.update_weights:
             raise ValueError(
                 f"sglang server {server_name!r} has update_weights=false; "
                 f"cannot bind a trainable policy to a frozen mirror"

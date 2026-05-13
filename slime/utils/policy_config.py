@@ -145,6 +145,18 @@ class PolicyConfig:
     # ── sglang sub-block (raw dict, projected to SglangConfig.ModelConfig later) ──
     sglang: dict | None = None
 
+    # ── Predicates used by the multi-policy framework ──
+    # These exist because "trainable" and "has SGLang engine" used to coincide
+    # (every trainable policy had a paired engine), but the standalone-SGLang
+    # teacher shape (m✗ s✓ trainable=false) breaks that equivalence. Filters
+    # that gate engine-related decisions should use has_engine(); allocation
+    # of a Megatron training actor should use has_megatron().
+    def has_engine(self) -> bool:
+        return self.sglang_num_nodes > 0 and self.sglang is not None
+
+    def has_megatron(self) -> bool:
+        return self.megatron_num_nodes > 0
+
 
 def validate_policy_config(cfg: PolicyConfig) -> None:
     if cfg.role != "actor":
@@ -158,10 +170,11 @@ def validate_policy_config(cfg: PolicyConfig) -> None:
     if not cfg.hf_checkpoint:
         raise ValueError(f"{cfg.name}: hf_checkpoint required")
 
-    # Sglang placement consistency. Frozen producers (e.g. OPD Megatron
-    # teacher) don't run an engine; their sglang sub-block / sglang_num_nodes
-    # are unused, so don't apply the placement check.
-    if cfg.sglang is not None and cfg.trainable:
+    # Sglang placement consistency. Applies to every policy that hosts an
+    # engine — trainable paired pipelines AND frozen standalone engines
+    # (e.g. OPD SGLang teacher, judge / RM). Megatron-only producers
+    # (m✓ s✗) are skipped because they don't run an engine at all.
+    if cfg.has_engine():
         sglang_total = cfg.sglang_num_nodes * cfg.num_gpus_per_node
         groups_total = sum(g["num_gpus"] for g in cfg.sglang.get("server_groups", []))
         if sglang_total != groups_total:
@@ -262,11 +275,17 @@ def build_sglang_config_from_policies(configs: list[PolicyConfig]):
 
     models = []
     for cfg in configs:
-        # Frozen producers (e.g. OPD Megatron teacher) have no engine.
-        if not cfg.trainable:
-            continue
-        if cfg.sglang is None:
+        # Detect inconsistent shape: sglang_num_nodes asks for engine GPUs but
+        # no sglang block was provided. Caught early here so the user gets a
+        # clear error instead of a silent skip.
+        if cfg.sglang is None and cfg.sglang_num_nodes > 0:
             raise ValueError(f"{cfg.name}: missing 'sglang' sub-block in config")
+        # Skip policies without an engine: Megatron-only producers
+        # (m✓ s✗ frozen teacher / critic). Engine-hosting policies — both
+        # trainable paired (m✓ s✓) and frozen standalone (m✗ s✓ judge / RM /
+        # OPD SGLang teacher) — fall through to build a ModelConfig.
+        if not cfg.has_engine():
+            continue
         sg = dict(cfg.sglang)
 
         # Server-args (everything except model-level fields) flow into each group's overrides.
@@ -299,9 +318,11 @@ def derive_cluster_sizing(configs: list[PolicyConfig], colocate: bool) -> tuple[
       - create_placement_groups_multi (to size the global PG)
     """
     actor_gpus = sum(c.megatron_num_nodes * c.num_gpus_per_node for c in configs)
-    # Frozen producers don't run an sglang engine, so they don't contribute
-    # to the rollout-side GPU budget.
-    rollout_gpus = sum(c.sglang_num_nodes * c.num_gpus_per_node for c in configs if c.trainable)
+    # Engine-hosting policies contribute to the rollout-side budget regardless
+    # of trainability: both trainable paired pipelines (m✓ s✓) and frozen
+    # standalone engines (m✗ s✓ judge / RM / OPD SGLang teacher) need GPUs.
+    # Megatron-only frozen producers (m✓ s✗) have no engine and are excluded.
+    rollout_gpus = sum(c.sglang_num_nodes * c.num_gpus_per_node for c in configs if c.has_engine())
     total_gpus = max(actor_gpus, rollout_gpus) if colocate else actor_gpus + rollout_gpus
     return actor_gpus, rollout_gpus, total_gpus
 

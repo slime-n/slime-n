@@ -1424,5 +1424,174 @@ class TestPerPolicyDerivedDefaults:
         assert ns.log_probs_max_tokens_per_gpu is None
 
 
+class TestFrozenEnginePolicyShape:
+    """Coverage for the m✗ s✓ trainable=false policy shape (frozen standalone
+    SGLang engine, e.g. OPD SGLang teacher / judge / RM).
+
+    The framework historically equated `cfg.trainable` with "hosts an engine".
+    This class verifies the four widened predicate sites — `has_engine()` /
+    `has_megatron()` helpers, `derive_cluster_sizing`, the validator's engine
+    placement check, and `build_sglang_config_from_policies` — handle the new
+    shape, while preserving behavior for paired-trainable and Megatron-only
+    frozen shapes.
+    """
+
+    def _frozen_sglang_teacher(self, **overrides) -> PolicyConfig:
+        base = dict(
+            name="teacher_sglang",
+            role="actor",
+            trainable=False,
+            hf_checkpoint="/x",
+            sglang_server="teacher_sglang",
+            buffer_mode="split",
+            num_gpus_per_node=1,
+            megatron_num_nodes=0,
+            sglang_num_nodes=1,
+            sglang={
+                "update_weights": False,
+                "num_gpus_per_engine": 1,
+                "server_groups": [{"worker_type": "regular", "num_gpus": 1}],
+            },
+        )
+        base.update(overrides)
+        return PolicyConfig(**base)
+
+    def _megatron_only_frozen_teacher(self, **overrides) -> PolicyConfig:
+        # Mirrors examples/multi_policy_opd_megatron/config.yaml teacher shape.
+        base = dict(
+            name="teacher_megatron",
+            role="actor",
+            trainable=False,
+            hf_checkpoint="/x",
+            sglang_server="teacher_megatron",
+            buffer_mode="split",
+            num_gpus_per_node=1,
+            megatron_num_nodes=1,
+            sglang_num_nodes=0,
+            sglang=None,
+        )
+        base.update(overrides)
+        return PolicyConfig(**base)
+
+    # ── helpers ──
+    def test_has_engine_trainable_paired(self):
+        cfg = _minimal_actor()
+        assert cfg.has_engine() is True
+        assert cfg.has_megatron() is True
+
+    def test_has_engine_megatron_only_frozen(self):
+        cfg = self._megatron_only_frozen_teacher()
+        assert cfg.has_engine() is False  # sglang_num_nodes=0 → no engine
+        assert cfg.has_megatron() is True
+
+    def test_has_engine_sglang_only_frozen(self):
+        cfg = self._frozen_sglang_teacher()
+        assert cfg.has_engine() is True  # sglang block + nodes>0
+        assert cfg.has_megatron() is False  # megatron_num_nodes=0
+
+    # ── validate_policy_config ──
+    def test_validator_accepts_sglang_only_frozen(self):
+        validate_policy_config(self._frozen_sglang_teacher())  # no raise
+
+    def test_validator_catches_sglang_placement_on_frozen_engine(self):
+        # Previously this was skipped for trainable=False; now applies whenever
+        # has_engine() is true. 1 node × 1 gpu = 1, server_groups sums to 2.
+        cfg = self._frozen_sglang_teacher(
+            sglang={
+                "update_weights": False,
+                "num_gpus_per_engine": 1,
+                "server_groups": [{"worker_type": "regular", "num_gpus": 2}],
+            }
+        )
+        with pytest.raises(ValueError, match="must equal sum of sglang.server_groups"):
+            validate_policy_config(cfg)
+
+    def test_validator_still_skips_megatron_only_frozen(self):
+        # m✓ s✗ frozen producer: no engine → placement check skipped.
+        validate_policy_config(self._megatron_only_frozen_teacher())  # no raise
+
+    # ── derive_cluster_sizing ──
+    def test_cluster_sizing_counts_frozen_sglang_teacher(self):
+        # Mirrors examples/multi_policy_opd_sglang/dev_config.yaml:
+        #   student (m✓ s✓) + teacher_sglang (m✗ s✓ frozen)
+        student = _minimal_actor(
+            name="student",
+            sglang_server="student",
+            num_gpus_per_node=1,
+            megatron_num_nodes=1,
+            sglang_num_nodes=1,
+            sglang={
+                "update_weights": True,
+                "num_gpus_per_engine": 1,
+                "server_groups": [{"worker_type": "regular", "num_gpus": 1}],
+            },
+        )
+        teacher = self._frozen_sglang_teacher()
+        actor, rollout, total = derive_cluster_sizing([student, teacher], colocate=False)
+        # actor: only student (teacher.megatron_num_nodes=0)
+        # rollout: BOTH student and teacher engines now counted (was 1 before fix)
+        assert actor == 1 and rollout == 2 and total == 3
+
+    def test_cluster_sizing_megatron_only_frozen_unchanged(self):
+        # Behavior parity for OPD-Megatron shape: frozen Megatron teacher
+        # still counted in actor_gpus, not in rollout_gpus.
+        student = _minimal_actor(
+            name="student",
+            sglang_server="student",
+            num_gpus_per_node=1,
+            megatron_num_nodes=1,
+            sglang_num_nodes=1,
+            sglang={
+                "update_weights": True,
+                "num_gpus_per_engine": 1,
+                "server_groups": [{"worker_type": "regular", "num_gpus": 1}],
+            },
+        )
+        teacher = self._megatron_only_frozen_teacher()
+        actor, rollout, total = derive_cluster_sizing([student, teacher], colocate=False)
+        assert actor == 2 and rollout == 1 and total == 3
+
+    # ── build_sglang_config_from_policies ──
+    def test_sglang_config_includes_frozen_sglang_teacher(self):
+        student = _minimal_actor(
+            name="student",
+            sglang_server="student",
+            num_gpus_per_node=1,
+            megatron_num_nodes=1,
+            sglang_num_nodes=1,
+            sglang={
+                "update_weights": True,
+                "num_gpus_per_engine": 1,
+                "server_groups": [{"worker_type": "regular", "num_gpus": 1}],
+            },
+        )
+        teacher = self._frozen_sglang_teacher()
+        sglang_config = build_sglang_config_from_policies([student, teacher])
+        names = [m.name for m in sglang_config.models]
+        assert names == ["student", "teacher_sglang"]
+        # Frozen engine carries update_weights=False through to its ModelConfig.
+        teacher_model = next(m for m in sglang_config.models if m.name == "teacher_sglang")
+        assert teacher_model.update_weights is False
+
+    def test_sglang_config_still_skips_megatron_only_frozen(self):
+        # Behavior parity for OPD-Megatron shape: teacher_megatron has no
+        # sglang block and is omitted from SglangConfig.models.
+        student = _minimal_actor(
+            name="student",
+            sglang_server="student",
+            num_gpus_per_node=1,
+            megatron_num_nodes=1,
+            sglang_num_nodes=1,
+            sglang={
+                "update_weights": True,
+                "num_gpus_per_engine": 1,
+                "server_groups": [{"worker_type": "regular", "num_gpus": 1}],
+            },
+        )
+        teacher = self._megatron_only_frozen_teacher()
+        sglang_config = build_sglang_config_from_policies([student, teacher])
+        assert [m.name for m in sglang_config.models] == ["student"]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

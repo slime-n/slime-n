@@ -303,12 +303,14 @@ def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
             role=cfg.role,
         )
         handles[cfg.name] = PolicyHandle(config=cfg, args=args_p, train_group=train_group)
-        # Frozen producers (e.g. OPD Megatron teacher) have no paired SGLang
-        # engine — register_policy would fail at _get_server. The downstream
-        # weight-push path is also gated on cfg.trainable in train_multi_policy.py
-        # and via the defensive early-return in actor.update_weights, so the
-        # frozen actor never tries to look up its engine.
-        if cfg.trainable:
+        # Register every engine-hosting policy with the rollout manager so it
+        # spins up an SGLang server and routes inference requests to it. This
+        # includes trainable paired pipelines (m✓ s✓) and frozen standalone
+        # engines (m✗ s✓ judge / RM / OPD SGLang teacher). Megatron-only frozen
+        # producers (m✓ s✗) skip registration — they have no engine, and
+        # _get_server would fail. Weight-push remains gated on cfg.trainable in
+        # train_multi_policy.py so frozen engines never get a weight broadcast.
+        if cfg.has_engine():
             ray.get(rollout_manager.register_policy.remote(cfg.name, cfg.sglang_server, args_p))
 
     # ── async_init each + reconcile start_rollout_ids across policies ──
