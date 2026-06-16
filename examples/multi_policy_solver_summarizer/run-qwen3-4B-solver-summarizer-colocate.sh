@@ -29,7 +29,8 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B.sh"
+# Qwen3-4B-Thinking-2507 shares the Qwen3-4B arch but uses rope_theta 5e6.
+MODEL_ARGS_ROTARY_BASE=5000000 source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B.sh"
 
 # Per-policy training fields live in config.yaml; run-level orchestration is CLI.
 
@@ -74,7 +75,7 @@ EVAL_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dev
-   --wandb-group qwen3-4B-solver-summarizer-colocate
+   --wandb-group qwen3-4B-Thinking-2507-solver-summarizer-colocate
 )
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}

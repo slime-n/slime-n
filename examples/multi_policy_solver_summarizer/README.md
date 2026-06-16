@@ -50,7 +50,7 @@ Two limitations: eval generation flows through the first-listed policy's SGLang 
 
 Reference curves below are from the original 1873-step run on Qwen3-0.6B
 (the example previously shipped at that size). The recipe is unchanged;
-only the model was swapped to Qwen3-4B.
+only the model was swapped to Qwen3-4B-Thinking-2507.
 
 **Per-role raw reward** — both policies trend up; summarizer mean
 ~0.54, solver mean ~0.43. The summarizer benefits from seeing all N
