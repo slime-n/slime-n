@@ -65,7 +65,7 @@ EVAL_ARGS=(
    # AIME-2024 eval (eval_config.yaml) with a custom per-role eval function.
    # --log-passrate intentionally off: it would trip a train-side group_size
    # assertion that the chain's num_parallel samples per call don't satisfy.
-   --eval-interval 2
+   --eval-interval 10
    --eval-config "${SCRIPT_DIR}/eval_config.yaml"
    --eval-function-path examples.multi_policy_solver_summarizer.eval_fn.eval_with_multi_agents
    --eval-max-response-len 32768
@@ -88,8 +88,6 @@ RUNTIME_ENV_JSON="{
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
   }
 }"
-# NOTE: do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True here —
-# torch_memory_saver (sglang's colocate pause/resume) won't init with it on.
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
