@@ -9,9 +9,9 @@ policies:
   - name: solver
     role: actor
 
-    hf_checkpoint: /root/Qwen3-0.6B
-    save: /ckpt/multi_policy_solver_summarizer/qwen3-0.6b/solver
-    # ref_load: /ckpt/qwen3-0.6b-torch-dist   # uncomment to resume from torch_dist
+    hf_checkpoint: /root/Qwen3-4B
+    save: /ckpt/multi_policy_solver_summarizer/qwen3-4b/solver
+    # ref_load: /ckpt/qwen3-4b-torch-dist   # uncomment to resume from torch_dist
 
     buffer_mode: split
 
@@ -69,7 +69,7 @@ policies:
       # Colocate: sglang and the trainer timeshare each policy's 4 GPUs
       # (torch_memory_saver pauses sglang during the train step; the trainer
       # is offloaded during rollout). They don't peak together, so 0.8 is
-      # safe on H200 (141GB) — the 0.6B Megatron weights fit the remainder.
+      # safe on H200 (141GB) — the 4B Megatron weights fit the remainder.
       mem_fraction_static: 0.8
       # cuda_graph_bs: [1, 2, 4, 8, 16, 32, 64]
       chunked_prefill_size: 4096
@@ -85,8 +85,8 @@ policies:
   - name: summarizer
     role: actor
 
-    hf_checkpoint: /root/Qwen3-0.6B
-    save: /ckpt/multi_policy_solver_summarizer/qwen3-0.6b/summarizer
+    hf_checkpoint: /root/Qwen3-4B
+    save: /ckpt/multi_policy_solver_summarizer/qwen3-4b/summarizer
 
     buffer_mode: split
 
