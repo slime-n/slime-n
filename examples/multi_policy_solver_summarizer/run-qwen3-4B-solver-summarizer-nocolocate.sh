@@ -23,12 +23,13 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen3-0.6B.sh"
+NUM_GPUS=8
 
-# Per-policy fields (parallel, recompute, batching, optimizer, loss, paths,
-# Megatron numerical / dropout, log_probs_chunk_size) all live in config.yaml.
-# Run-level orchestration (rollout cadence, wandb) stays as CLI args.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# Qwen3-4B-Thinking-2507 shares the Qwen3-4B arch but uses rope_theta 5e6.
+MODEL_ARGS_ROTARY_BASE=5000000 source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B.sh"
+
+# Per-policy training fields live in config.yaml; run-level orchestration is CLI.
 
 ROLLOUT_ARGS=(
    --custom-generate-function-path examples.multi_policy_solver_summarizer.rollout_with_multi_agents.generate_with_multi_agents
@@ -46,36 +47,23 @@ ROLLOUT_ARGS=(
    --rollout-temperature 1
    --balance-data
 )
-# n_samples_per_prompt / global_batch_size are projected onto manager-global
-# args from config.yaml's first policy by _set_multi_policy_global_defaults.
+# n_samples_per_prompt / global_batch_size are taken from the first policy in config.yaml.
 
-# Cluster sizing — derived from config.yaml (NO colocate):
-#   actor_gpus   = sum(megatron_num_nodes * num_gpus_per_node) = 2 × 1 × 1 = 2
-#   rollout_gpus = sum(sglang_num_nodes   * num_gpus_per_node) = 2 × 3 × 1 = 6
-#   total        = actor_gpus + rollout_gpus                   = 8
-# Layout (8×H200): GPUs 0,1 = solver+summarizer Megatron actors;
-#   GPUs 2-4 = 3 solver sglang engines; GPUs 5-7 = 3 summarizer sglang engines.
-NUM_GPUS=8
+
+
 
 TRAIN_ARGS=(
    --config "${SCRIPT_DIR}/config-nocolocate.yaml"
    --save-interval 5
-   # Per-role rollout/train data dumps land under
-   #   <dump-details>/<policy_name>/rollout_data/<rollout_id>.pt
-   #   <dump-details>/<policy_name>/train_data/<rollout_id>_<rank>.pt
-   #   <dump-details>/<policy_name>/packed_data/<rollout_id>_<rank>.pt
+   # Dumps land under <dump-details>/<policy_name>/{rollout,train,packed}_data/.
    --dump-details /tmp/multi_policy_solver_summarizer/dump_details
 )
-# Note: train_multi_policy.py derives args.rollout_num_gpus from config.yaml
-# (sum of sglang_num_nodes × num_gpus_per_node). No --rollout-num-gpus needed.
-# Without --colocate, no offload/onload is required between train and rollout.
+# rollout GPU count is derived from config.yaml; no --rollout-num-gpus needed.
 
 EVAL_ARGS=(
-   # AIME-2024 via eval_config.yaml. Custom eval function emits four
-   # per-prompt aggregates per dataset: best-of-4 and mean for each
-   # role. --log-passrate intentionally not set; it would also trigger
-   # train-side pass-rate logging whose group_size assertion does not
-   # hold when the chain emits num_parallel samples per call.
+   # AIME-2024 eval (eval_config.yaml) with a custom per-role eval function.
+   # --log-passrate intentionally off: it would trip a train-side group_size
+   # assertion that the chain's num_parallel samples per call don't satisfy.
    --eval-interval 2
    --eval-config "${SCRIPT_DIR}/eval_config.yaml"
    --eval-function-path examples.multi_policy_solver_summarizer.eval_fn.eval_with_multi_agents
@@ -86,11 +74,8 @@ EVAL_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dev
-   --wandb-group qwen3-0.6B-solver-summarizer
+   --wandb-group qwen3-4B-Thinking-2507-solver-summarizer
 )
-
-# sglang server args are per-policy in config.yaml (sglang sub-block).
-# Megatron numerical / dropout flags are per-policy in config.yaml's megatron block.
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265

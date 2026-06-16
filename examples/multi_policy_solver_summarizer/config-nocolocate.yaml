@@ -8,9 +8,9 @@ policies:
   - name: solver
     role: actor
 
-    hf_checkpoint: /root/Qwen3-0.6B
-    save: /ckpt/multi_policy_solver_summarizer/qwen3-0.6b/solver
-    # ref_load: /ckpt/qwen3-0.6b-torch-dist   # uncomment to resume from torch_dist
+    hf_checkpoint: /root/Qwen3-4B-Thinking-2507
+    save: /ckpt/multi_policy_solver_summarizer/qwen3-4b-thinking-2507/solver
+    # ref_load: /ckpt/qwen3-4b-thinking-2507-torch-dist   # uncomment to resume from torch_dist
 
     buffer_mode: split
 
@@ -81,8 +81,8 @@ policies:
   - name: summarizer
     role: actor
 
-    hf_checkpoint: /root/Qwen3-0.6B
-    save: /ckpt/multi_policy_solver_summarizer/qwen3-0.6b/summarizer
+    hf_checkpoint: /root/Qwen3-4B-Thinking-2507
+    save: /ckpt/multi_policy_solver_summarizer/qwen3-4b-thinking-2507/summarizer
 
     buffer_mode: split
 
